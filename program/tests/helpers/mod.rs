@@ -220,6 +220,96 @@ pub async fn create_stake_pool(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn create_liq_pool(
+    banks_client: &mut BanksClient,
+    payer: &Keypair,
+    recent_blockhash: &Hash,
+    liq_pool: &Keypair,
+    liq_pool_authority: &Pubkey,
+    pool_mint: &Pubkey,
+    side1_wsol_token_account: &Pubkey,
+    side2_st_sol_token_account: &Pubkey,
+    owner: &Keypair,
+    fee: &instruction::Fee,
+
+) -> Result<(), TransportError> {
+
+    let rent = banks_client.get_rent().await.unwrap();
+    let rent_liq_pool = rent.minimum_balance(state::LiqPool::LEN);
+
+        //-------------------
+        //liq pool state account (not used yet)
+        // create_account(
+        //     &mut banks_client,
+        //     &payer,
+        //     &recent_blockhash,
+        //     &self.liq_pool_state_acc,
+        // )
+        // .await?;
+
+
+    let mut transaction = Transaction::new_with_payer(
+        &[
+            system_instruction::create_account(
+                &payer.pubkey(),
+                &liq_pool.pubkey(),
+                rent_liq_pool,
+                state::LiqPool::LEN as u64,
+                &id(),
+            ),
+            instruction::initialize_liq_pool(
+                &id(),
+                &liq_pool.pubkey(),
+                &owner.pubkey(),
+            )
+            .unwrap(),
+        ],
+        Some(&payer.pubkey()),
+    );
+    transaction.sign(
+        &[payer, liq_pool, validator_liq_list, owner],
+        *recent_blockhash,
+    );
+    banks_client.process_transaction(transaction).await?;
+
+    //--LIQ POOL legs & mint
+    // lp wsol acc (1st side of the liq-pool)
+    create_token_account(
+        &mut banks_client,
+        &payer,
+        &recent_blockhash,
+        &self.liq_pool_wsol_acc,
+        &String::from(W_SOL_1111111_MINT_ACCOUNT).parse().unwrap(),
+        &self.liq_pool_authority,
+    )
+    .await?;
+
+    // lp st_sol acc (2nd side of the liq-pool)
+    create_token_account(
+        &mut banks_client,
+        &payer,
+        &recent_blockhash,
+        &self.liq_pool_st_sol_acc,
+        &self.pool_mint.pubkey(),
+        &self.liq_pool_authority,
+    )
+    .await?;
+
+    // meta_lp mint
+    create_mint(
+        &mut banks_client,
+        &payer,
+        &recent_blockhash,
+        &self.meta_lp_mint_acc,
+        &self.liq_pool_authority,
+    )
+    .await?;
+
+    Ok(())
+}
+
+
 pub async fn create_vote(
     banks_client: &mut BanksClient,
     payer: &Keypair,
@@ -472,7 +562,10 @@ pub struct StakePoolAccounts {
     pub fee: instruction::Fee,
 
     pub liq_pool_state_acc: Keypair,
+    
     pub liq_pool_authority: Pubkey,
+    pub lpa_bump: u8,
+
     pub meta_lp_mint_acc: Keypair,
     pub liq_pool_wsol_acc: Keypair,
     pub liq_pool_st_sol_acc: Keypair,
@@ -514,7 +607,7 @@ impl StakePoolAccounts {
         // );
         println!("id {}",&id());
         println!("&liq_pool_state_acc.pubkey().to_bytes()[..32] {:?}",&liq_pool_state_acc.pubkey().to_bytes()[..32]);
-        let liq_pool_authority = Pubkey::create_program_address(&[&liq_pool_state_acc.pubkey().to_bytes()[..32] ,b"authority",b"0"], &id()).unwrap();
+        let (liq_pool_authority, lpa_bump) = Pubkey::try_find_program_address(&[&liq_pool_state_acc.pubkey().to_bytes()[..32] ,b"authority"], &id()).unwrap();
         //println!("liq_pool_authority {} bump {}",liq_pool_authority,bump);
         println!("liq_pool_authority {}",liq_pool_authority);
 
@@ -531,7 +624,10 @@ impl StakePoolAccounts {
                 denominator: 100,
             },
             liq_pool_state_acc,
+
             liq_pool_authority,
+            lpa_bump,
+
             meta_lp_mint_acc,
             liq_pool_wsol_acc,
             liq_pool_st_sol_acc,
@@ -567,6 +663,7 @@ impl StakePoolAccounts {
             &self.owner.pubkey(),
         )
         .await?;
+
         create_stake_pool(
             &mut banks_client,
             &payer,
@@ -580,48 +677,17 @@ impl StakePoolAccounts {
         )
         .await?;
 
-        //liq pool state account (not used yet)
-        create_account(
+        create_liq_pool(
             &mut banks_client,
             &payer,
             &recent_blockhash,
             &self.liq_pool_state_acc,
+            &self.liq_pool_authority.pubkey(),
+            &self.owner,
+            &self.fee,
         )
         .await?;
 
-        //--LIQ POOL
-
-        // lp wsol acc (1st side of the liq-pool)
-        create_token_account(
-            &mut banks_client,
-            &payer,
-            &recent_blockhash,
-            &self.liq_pool_wsol_acc,
-            &String::from(W_SOL_1111111_MINT_ACCOUNT).parse().unwrap(),
-            &self.liq_pool_authority,
-        )
-        .await?;
-
-        // lp st_sol acc (2nd side of the liq-pool)
-        create_token_account(
-            &mut banks_client,
-            &payer,
-            &recent_blockhash,
-            &self.liq_pool_st_sol_acc,
-            &self.pool_mint.pubkey(),
-            &self.liq_pool_authority,
-        )
-        .await?;
-
-        // meta_lp mint
-        create_mint(
-            &mut banks_client,
-            &payer,
-            &recent_blockhash,
-            &self.meta_lp_mint_acc,
-            &self.liq_pool_authority,
-        )
-        .await?;
 
         Ok(())
     }

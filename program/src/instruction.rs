@@ -28,6 +28,16 @@ pub struct InitArgs {
     pub fee: Fee,
 }
 
+/// Inital values for the Liq Pool
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InitArgsLiqPool {
+    /// liq-pool authority PDA bump
+    pub authority_bump: u8,
+    /// Fee paid to the owner in pool tokens
+    pub fee: Fee,
+}
+
 /// Instructions supported by the StakePool program.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
@@ -186,6 +196,18 @@ pub enum StakePoolInstruction {
     ///   6. `[w]` Unitialized account to receive wSOL
     ///   userdata: amount to sell
     SellstSOL(u64),
+
+    ///   Admin: Initializes the LiqPool.
+    ///
+    ///   0. `[w]` LiqPool to initialize.
+    ///   1. `[s]` Owner
+    ///   2. `[w]` Uninitialized validator stake list storage account
+    ///   3. `[]` pool token Mint. Must be non zero, owned by withdraw authority.
+    ///   4. `[]` Pool Account to deposit the generated fee for owner.
+    ///   5. `[]` Clock sysvar
+    ///   6. `[]` Rent sysvar
+    ///   7. `[]` Token program id
+    InitializeLiqPool(InitArgsLiqPool),
 }
 
 impl StakePoolInstruction {
@@ -219,6 +241,10 @@ impl StakePoolInstruction {
             11 => {
                 let val: &u64 = unpack(input)?;
                 Self::SellstSOL(*val)
+            }
+            12 => {
+                let val: &InitArgsLiqPool = unpack(input)?;
+                Self::InitializeLiqPool(*val)
             }
             _ => return Err(ProgramError::InvalidAccountData),
         })
@@ -272,9 +298,15 @@ impl StakePoolInstruction {
                 *value = *val;
             }
             Self::SellstSOL(val) => {
-                output[0] = 10;
+                output[0] = 11;
                 #[allow(clippy::cast_ptr_alignment)]
                 let value = unsafe { &mut *(&mut output[1] as *mut u8 as *mut u64) };
+                *value = *val;
+            }
+            Self::InitializeLiqPool(val) => {
+                output[0] = 12;
+                #[allow(clippy::cast_ptr_alignment)]
+                let value = unsafe { &mut *(&mut output[1] as *mut u8 as *mut InitArgsLiqPool) };
                 *value = *val;
             }
         }
@@ -321,6 +353,29 @@ pub fn initialize(
         data,
     })
 }
+
+/// Creates an 'initialize_liq_pool' instruction.
+pub fn initialize_liq_pool(
+    program_id: &Pubkey,
+    liq_pool_state_acc: &Pubkey,
+    owner: &Pubkey,
+    init_args: InitArgsLiqPool,
+) -> Result<Instruction, ProgramError> {
+    let init_data = StakePoolInstruction::InitializeLiqPool(init_args);
+    let data = init_data.serialize()?;
+    let accounts = vec![
+        AccountMeta::new(*liq_pool_state_acc, true),
+        AccountMeta::new_readonly(*owner, true),
+        AccountMeta::new_readonly(sysvar::clock::id(), false),
+        AccountMeta::new_readonly(sysvar::rent::id(), false),
+    ];
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts,
+        data,
+    })
+}
+
 
 /// Creates `CreateValidatorStakeAccount` instruction (create new stake account for the validator)
 pub fn create_validator_stake_account(

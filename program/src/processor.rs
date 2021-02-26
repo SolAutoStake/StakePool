@@ -2,9 +2,9 @@
 
 use crate::{
     error::StakePoolError,
-    instruction::{InitArgs, StakePoolInstruction},
+    instruction::{InitArgs, StakePoolInstruction, InitArgsLiqPool},
     stake,
-    state::{StakePool, ValidatorStakeInfo, ValidatorStakeList},
+    state::{StakePool, ValidatorStakeInfo, ValidatorStakeList, LiqPool},
     PROGRAM_VERSION,
 };
 use bincode::deserialize;
@@ -263,12 +263,12 @@ impl Processor {
         mint: AccountInfo<'a>,
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
-        authority_seed1: &[u8],
+        authority_bump: u8,
         amount: u64,
     ) -> Result<(), ProgramError> {
 
         msg!("&liq_pool_account.to_bytes()[..32] {:?}", &liq_pool_account.to_bytes()[..32]);
-        let signer_seeds: &[&[_]] =&[&liq_pool_account.to_bytes()[..32] ,b"authority",b"0"];
+        let signer_seeds: &[&[_]] =&[&liq_pool_account.to_bytes()[..32] ,b"authority",&[authority_bump]];
 
         //pub fn mint_to( 
         // token_program_id: &Pubkey, 
@@ -429,6 +429,53 @@ impl Processor {
         stake_pool.fee = init.fee;
 
         stake_pool.serialize(&mut stake_pool_info.data.borrow_mut())
+    }
+
+    /// Processes `Initialize` instruction.
+    pub fn process_initialize_liq_pool(
+        program_id: &Pubkey,
+        init: InitArgsLiqPool,
+        accounts: &[AccountInfo],
+    ) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+        let liq_pool_info = next_account_info(account_info_iter)?;
+        let owner_info = next_account_info(account_info_iter)?;
+        // Clock sysvar account
+        let clock_info = next_account_info(account_info_iter)?;
+        let clock = &Clock::from_account_info(clock_info)?;
+        // Rent sysvar account
+        let rent_info = next_account_info(account_info_iter)?;
+        let rent = &Rent::from_account_info(rent_info)?;
+
+        // Check if transaction was signed by owner
+        if !owner_info.is_signer {
+            return Err(StakePoolError::SignatureMissing.into());
+        }
+
+        let mut liq_pool_state_data = LiqPool::deserialize(&liq_pool_info.data.borrow())?;
+        // Stake pool account should not be already initialized
+        if liq_pool_state_data.is_initialized() {
+            return Err(StakePoolError::AlreadyInUse.into());
+        }
+
+        // Check if stake pool account is rent-exempt
+        if !rent.is_exempt(liq_pool_info.lamports(), liq_pool_info.data_len()) {
+            return Err(StakePoolError::AccountNotRentExempt.into());
+        }
+
+        // Numerator should be smaller than or equal to denominator (fee <= 1)
+        if init.fee.numerator > init.fee.denominator {
+            return Err(StakePoolError::FeeTooHigh.into());
+        }
+
+        msg!("Clock data: {:?}", clock_info.data.borrow());
+        msg!("Epoch: {}", clock.epoch);
+
+        liq_pool_state_data.version = PROGRAM_VERSION;
+        liq_pool_state_data.owner = *owner_info.key;
+        liq_pool_state_data.authority_bump = init.authority_bump;
+
+        liq_pool_state_data.serialize(&mut liq_pool_info.data.borrow_mut())
     }
 
     /// Processes `CreateValidatorStakeAccount` instruction.
@@ -1080,7 +1127,7 @@ impl Processor {
 
         // Get stake pool stake (and check if it is initialized)
         // msg!("stake_pool_info {:?}",liq_pool_state_account);
-        // let stake_pool_data = StakePool::deserialize(&liq_pool_state_account.data.borrow())?;
+        let liq_pool_data = LiqPool::deserialize(&liq_pool_state_account.data.borrow())?;
         // if !stake_pool_data.is_initialized() {
         //     return Err(StakePoolError::InvalidState.into());
         // }
@@ -1134,7 +1181,7 @@ impl Processor {
             metalp_token_mint_account.clone(),
             user_metalp_account_destination.clone(),
             metalp_mint_authority.clone(),
-            Self::AUTHORITY_WITHDRAW,
+            1,
             metalp_amount,
         )?;
 
@@ -1707,6 +1754,10 @@ impl Processor {
             StakePoolInstruction::SellstSOL(stsol_amount) => {
                 msg!("Instruction: sell stSOL");
                 Self::process_sell_stsol(program_id, stsol_amount, accounts)
+            }
+            StakePoolInstruction::InitializeLiqPool(init) => {
+                msg!("Instruction: InitLiqPool");
+                Self::process_initialize_liq_pool(program_id, init, accounts)
             }
         }
     }

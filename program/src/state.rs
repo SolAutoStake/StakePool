@@ -11,7 +11,7 @@ use solana_program::{
 use std::convert::TryFrom;
 use std::mem::size_of;
 
-/// Initialized program details.
+/// StakePool state struct
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StakePool {
@@ -164,6 +164,77 @@ impl StakePool {
         Ok(())
     }
 }
+
+
+//--------------------------------------------------------
+/// LiqPool state struct
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LiqPool {
+    /// Pool version
+    pub version: u8,
+    /// Owner authority
+    /// allows for updating the staking authority
+    pub owner: Pubkey,
+    /// authority bump seed
+    pub authority_bump: u8,
+    /// Withdrawal authority bump seed
+    /// for `create_program_address(&[state::StakePool account, "withdrawal"])`
+    pub unused_seed: u8,
+    /// Validator stake list storage account
+    pub unused_pubkey_1: Pubkey,
+    /// Pool Mint
+    pub unused_pubkey_2: Pubkey,
+    /// Owner fee account
+    pub unused_pubkey_3: Pubkey,
+    /// Pool token program id
+    pub unused_pubkey_4: Pubkey,
+    /// total stake under management (lamports)
+    pub unused_u64_1: u64,
+    /// total pool (in tokens)
+    pub unused_u64_2: u64,
+    /// Last epoch stake_total field was updated
+    pub last_update_epoch: u64,
+    /// Fee applied to deposits
+    pub unused_fee: Fee,
+}
+
+impl LiqPool {
+    /// Length of state data when serialized
+    pub const LEN: usize = size_of::<LiqPool>();
+
+    /// Check if LiqPool is initialized
+    pub fn is_initialized(&self) -> bool {
+        self.version > 0
+    }
+
+    /// Deserializes a byte buffer into a [LiqPool](struct.LiqPool.html).
+    pub fn deserialize(input: &[u8]) -> Result<LiqPool, ProgramError> {
+        if input.len() < size_of::<LiqPool>() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let account_data: &LiqPool = unsafe { &*(&input[0] as *const u8 as *const LiqPool) };
+
+        Ok(*account_data)
+    }
+
+    /// Serializes [LiqPool](struct.LiqPool.html) into a byte buffer.
+    pub fn serialize(&self, output: &mut [u8]) -> ProgramResult {
+        if output.len() < size_of::<LiqPool>() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        #[allow(clippy::cast_ptr_alignment)]
+        //creates a pointer to the start of the buffer with the "shape" of the LiqPool
+        let value = unsafe { &mut *(&mut output[0] as *mut u8 as *mut LiqPool) };
+        //copies this struct flat memory into the buffer
+        *value = *self;
+
+        Ok(())
+    }
+}
+
+//--------------------------------------------------------
 
 const MAX_VALIDATOR_STAKE_ACCOUNTS: usize = 1000;
 
